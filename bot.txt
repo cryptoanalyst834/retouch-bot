@@ -1,0 +1,230 @@
+﻿import logging
+import cv2
+import numpy as np
+from io import BytesIO
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ConversationHandler,
+    ContextTypes,
+    filters
+)
+
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+RETOUCH_WAITING_FOR_IMAGE = 1
+RETOUCH_WAITING_FOR_OPTION = 2
+
+ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.heic']
+
+INSTRUCTIONS_TEXT = (
+    "Я обрабатываю фотографии, отправленные только файлом.\n\n"
+    "📎 **Как отправить фото файлом?**\n\n"
+    "🖥 **Как в Телеграм отправить фото файлом с ПК?**\n"
+    "1. Нажмите на скрепку.\n"
+    "2. Выберите файлы для отправки.\n"
+    "3. Нажмите «Открыть».\n"
+    "4. Уберите галочку «Сжимать изображение».\n"
+    "5. Нажмите кнопку «Отправить».\n\n"
+    "📱 **Как в Телеграм отправить фото файлом на iPhone и Android?**\n"
+    "1. Нажмите на скрепку.\n"
+    "2. Выберите вкладку «Файл».\n"
+    "3. Нажмите «Выбрать из Галереи».\n"
+    "4. В окне «Выбор файлов» выберите фотографию.\n"
+    "5. Нажмите «Отправить».\n\n"
+    "ВНИМАНИЕ: поддерживаются только файлы в формате JPG/JPEG и HEIC.\n\n"
+    "Если у вас возникли трудности – пишите в поддержку 👇🏻"
+)
+
+def adjust_brightness_contrast(image, brightness=30, contrast=0):
+    if image is None:
+        raise ValueError("Image cannot be None. Please provide a valid image.")
+    beta = brightness
+    alpha = (contrast + 127) / 127
+    return cv2.convertScaleAbs(image, alpha=alpha, beta=beta)
+
+def remove_noise(image):
+    return cv2.fastNlMeansDenoisingColored(image, None, 10, 10, 7, 21)
+
+def correct_color_exposure(image):
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+    v_eq = cv2.equalizeHist(v)
+    hsv_eq = cv2.merge((h, s, v_eq))
+    return cv2.cvtColor(hsv_eq, cv2.COLOR_HSV2BGR)
+
+def apply_stylization(image):
+    try:
+        return cv2.stylization(image, sigma_s=100, sigma_r=0.05)
+    except Exception as e:
+        logger.error(f"Error during stylization: {e}")
+        return image
+
+def skin_retouch(image):
+    return cv2.bilateralFilter(image, d=9, sigmaColor=75, sigmaSpace=75)
+
+def enhance_sharpness(image):
+    kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+    return cv2.filter2D(image, -1, kernel)
+
+def red_eye_removal(image):
+    return image
+
+def full_process(image):
+    processed = adjust_brightness_contrast(image)
+    processed = skin_retouch(processed)
+    processed = remove_noise(processed)
+    processed = correct_color_exposure(processed)
+    processed = apply_stylization(processed)
+    processed = enhance_sharpness(processed)
+    processed = red_eye_removal(processed)
+    return processed
+
+def neural_retouch(image):
+    try:
+        from gfpgan import GFPGANer
+    except ImportError:
+        logger.error("GFPGAN package is not installed. Install it by following the instructions from the GFPGAN repository.")
+        return image
+
+    model_path = 'models/GFPGANv1.3.pth'
+    try:
+        gfpganer = GFPGANer(model_path=model_path, upscale=2, arch='clean', channel_multiplier=2, bg_upsampler=None)
+        _, _, output = gfpganer.enhance(image, has_aligned=False, only_center_face=False, paste_back=True)
+        return output
+    except Exception as e:
+        logger.error(f"Neural retouch error: {e}", exc_info=True)
+        return image
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        "Привет! Я бот для ретуши фотографий (EasyRetouch по аналогии).\n\n"
+        "Используйте команду /retouch для обработки фотографий."
+    )
+
+async def retouch_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text(
+        "Пожалуйста, отправьте фотографию файлом (не сжимая изображение).\n\n" + INSTRUCTIONS_TEXT
+    )
+    return RETOUCH_WAITING_FOR_IMAGE
+
+async def retouch_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.message.document:
+        file_name = update.message.document.file_name.lower()
+        if not any(file_name.endswith(ext) for ext in ALLOWED_EXTENSIONS):
+            await update.message.reply_text(INSTRUCTIONS_TEXT)
+            return ConversationHandler.END
+
+        file = await update.message.document.get_file()
+        file_bytes = BytesIO()
+        await file.download_to_memory(out=file_bytes)
+        data = np.frombuffer(file_bytes.getvalue(), dtype=np.uint8)
+        img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+        if img is None:
+            await update.message.reply_text("Ошибка при декодировании изображения.")
+            return ConversationHandler.END
+        context.user_data["image_data"] = img
+
+        keyboard = [
+            [InlineKeyboardButton("Легкая цветокоррекция", callback_data="option:color_correction")],
+            [InlineKeyboardButton("Ретушь кожи", callback_data="option:skin_retouch")],
+            [InlineKeyboardButton("Удаление шумов", callback_data="option:remove_noise")],
+            [InlineKeyboardButton("Стилизация", callback_data="option:stylization")],
+            [InlineKeyboardButton("Улучшение резкости", callback_data="option:sharpness")],
+            [InlineKeyboardButton("Удаление красных глаз", callback_data="option:red_eye")],
+            [InlineKeyboardButton("Комплексная обработка", callback_data="option:full_process")],
+            [InlineKeyboardButton("Нейросетевой ретушь", callback_data="option:neural_retouch")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("Выберите вариант обработки:", reply_markup=reply_markup)
+        return RETOUCH_WAITING_FOR_OPTION
+
+    elif update.message.photo:
+        await update.message.reply_text(INSTRUCTIONS_TEXT)
+        return ConversationHandler.END
+    else:
+        await update.message.reply_text("Пожалуйста, отправьте фотографию файлом (формат JPG/JPEG или HEIC).")
+        return ConversationHandler.END
+
+async def retouch_option_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    selected_option = data.split(":")[1]
+
+    if "image_data" not in context.user_data:
+        await query.edit_message_text("Изображение не найдено. Пожалуйста, попробуйте снова.")
+        return ConversationHandler.END
+
+    image = context.user_data["image_data"]
+
+    match selected_option:
+        case "color_correction":
+            processed = correct_color_exposure(image)
+        case "skin_retouch":
+            processed = skin_retouch(image)
+        case "remove_noise":
+            processed = remove_noise(image)
+        case "stylization":
+            processed = apply_stylization(image)
+        case "sharpness":
+            processed = enhance_sharpness(image)
+        case "red_eye":
+            processed = red_eye_removal(image)
+        case "full_process":
+            processed = full_process(image)
+        case "neural_retouch":
+            processed = neural_retouch(image)
+        case _:
+            await query.edit_message_text("Неверный вариант обработки.")
+            return ConversationHandler.END
+
+    success, buffer = cv2.imencode('.jpg', processed, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+    if not success:
+        await query.edit_message_text("Ошибка при кодировании изображения.")
+        return ConversationHandler.END
+
+    processed_bytes = BytesIO(buffer)
+    processed_bytes.seek(0)
+    await query.message.reply_photo(photo=processed_bytes, caption="Вот обработанное изображение.")
+    context.user_data.pop("image_data", None)
+    await query.edit_message_text("Обработка завершена.")
+    return ConversationHandler.END
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("Операция отменена.")
+    return ConversationHandler.END
+
+def main() -> None:
+    application = Application.builder().token("8030737600:AAGvqHyrIEVHWAYUc5RH3aX6UCkVMzWNRLg").build()
+
+    retouch_conv = ConversationHandler(
+        entry_points=[CommandHandler("retouch", retouch_start)],
+        states={
+            RETOUCH_WAITING_FOR_IMAGE: [
+                MessageHandler(filters.Document.IMAGE | filters.PHOTO, retouch_photo_handler)
+            ],
+            RETOUCH_WAITING_FOR_OPTION: [
+                CallbackQueryHandler(retouch_option_handler, pattern="^option:")
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+    application.add_handler(retouch_conv)
+    application.add_handler(CommandHandler("start", start))
+
+    application.run_polling()
+
+if __name__ == '__main__':
+    main()
