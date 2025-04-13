@@ -275,7 +275,4 @@ if __name__ == '__main__':
     asyncio.run(main())
 '''
 
-with open("/mnt/data/main.py", "w") as f:
-    f.write(main_code)
-
-"/mnt/data/main.py"
+with open("main.py", "w") as f
