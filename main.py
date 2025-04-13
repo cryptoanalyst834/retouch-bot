@@ -27,7 +27,7 @@ RETOUCH_WAITING_FOR_IMAGE = 1
 RETOUCH_WAITING_FOR_OPTION = 2
 ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.heic']
 MAX_FREE_RETOUCHES = 5
-ADMIN_IDS = [743050845]  # Заменить на Telegram user_id администратора
+ADMIN_IDS = [743050845]
 
 INSTRUCTIONS_TEXT = (
     "📎 Отправьте фото *файлом*, не сжимая изображение.\n\n"
@@ -73,65 +73,12 @@ def set_user_pro(user_id, value: bool):
     user["is_pro"] = value
     save_users(users_data)
 
-# === Image processing ===
-def adjust_brightness_contrast(image, brightness=30, contrast=0):
-    return cv2.convertScaleAbs(image, alpha=(contrast + 127) / 127, beta=brightness)
+def reset_user_count(user_id):
+    user = get_user_data(user_id)
+    user["count"] = 0
+    save_users(users_data)
 
-def remove_noise(image):
-    return cv2.fastNlMeansDenoisingColored(image, None, 10, 10, 7, 21)
-
-def correct_color_exposure(image):
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-    h, s, v = cv2.split(hsv)
-    v_eq = cv2.equalizeHist(v)
-    return cv2.cvtColor(cv2.merge((h, s, v_eq)), cv2.COLOR_HSV2BGR)
-
-def skin_retouch(image):
-    return cv2.bilateralFilter(image, d=9, sigmaColor=75, sigmaSpace=75)
-
-def enhance_sharpness(image):
-    kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
-    return cv2.filter2D(image, -1, kernel)
-
-def full_process(image):
-    image = adjust_brightness_contrast(image)
-    image = skin_retouch(image)
-    image = remove_noise(image)
-    image = correct_color_exposure(image)
-    image = enhance_sharpness(image)
-    return image
-
-def merge_images(img1, img2):
-    im1 = Image.fromarray(cv2.cvtColor(img1, cv2.COLOR_BGR2RGB))
-    im2 = Image.fromarray(cv2.cvtColor(img2, cv2.COLOR_BGR2RGB))
-    new_im = Image.new('RGB', (im1.width + im2.width, max(im1.height, im2.height)))
-    new_im.paste(im1, (0, 0))
-    new_im.paste(im2, (im1.width, 0))
-    output = BytesIO()
-    new_im.save(output, format='JPEG')
-    output.seek(0)
-    return output
-
-def neural_retouch_deepai(image_path: str) -> bytes:
-    api_key = os.getenv("DEEPAI_API_KEY", "dd660eb7-a85c-490c-962b-eae835ff8c7c")
-    try:
-        response = requests.post(
-            "https://api.deepai.org/api/torch-srgan",
-            files={"image": open(image_path, "rb")},
-            headers={"api-key": api_key}
-        )
-        result_url = response.json().get("output_url")
-        if result_url:
-            return requests.get(result_url).content
-        else:
-            raise ValueError("DeepAI API did not return output_url.")
-    except Exception as e:
-        raise RuntimeError(f"DeepAI API error: {e}")
-
-# === Telegram Handlers ===
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Я бот EasyRetouch ✨\nИспользуй /retouch, чтобы начать обработку фото.")
-
+# === Telegram Admin Handlers ===
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
@@ -158,119 +105,32 @@ async def setpro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Ошибка: {e}")
 
-async def retouch_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(INSTRUCTIONS_TEXT, parse_mode="Markdown")
-    return RETOUCH_WAITING_FOR_IMAGE
-
-async def retouch_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def revokepro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if not user_has_access(user_id):
-        keyboard = [[InlineKeyboardButton("Получить Pro-доступ 💎", url="https://t.me/your_payment_link")]]
-        await update.message.reply_text(
-            "Вы использовали 5 бесплатных улучшений. Хотите продолжить?", 
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return ConversationHandler.END
-
-    if update.message.document:
-        file = await update.message.document.get_file()
-        file_bytes = BytesIO()
-        await file.download_to_memory(out=file_bytes)
-        img = cv2.imdecode(np.frombuffer(file_bytes.getvalue(), dtype=np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
-            await update.message.reply_text("Ошибка при декодировании изображения.")
-            return ConversationHandler.END
-
-        file_path = f"temp_{update.message.message_id}.jpg"
-        cv2.imwrite(file_path, img)
-        context.user_data["original_image"] = img
-        context.user_data["file_path"] = file_path
-
-        keyboard = [
-            [InlineKeyboardButton("Лайт ✨", callback_data="preset:light")],
-            [InlineKeyboardButton("Бьюти 💄", callback_data="preset:beauty")],
-            [InlineKeyboardButton("Про 🎯", callback_data="preset:pro")],
-            [InlineKeyboardButton("Нейроретушь 🧠", callback_data="preset:neuro")],
-        ]
-        await update.message.reply_text("Выбери режим ретуши:", reply_markup=InlineKeyboardMarkup(keyboard))
-        return RETOUCH_WAITING_FOR_OPTION
-    else:
-        await update.message.reply_text(INSTRUCTIONS_TEXT)
-        return ConversationHandler.END
-
-async def retouch_option_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    original = context.user_data.get("original_image")
-    file_path = context.user_data.get("file_path")
-
-    if original is None:
-        await query.edit_message_text("Файл не найден. Попробуйте снова.")
-        return ConversationHandler.END
-
-    mode = query.data.split(":")[1]
-
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("Нет доступа ❌")
+        return
+    if not context.args:
+        await update.message.reply_text("Использование: /revokepro user_id")
+        return
     try:
-        if mode == "light":
-            result = correct_color_exposure(adjust_brightness_contrast(original))
-        elif mode == "beauty":
-            result = enhance_sharpness(remove_noise(skin_retouch(original)))
-        elif mode == "pro":
-            result = full_process(original)
-        elif mode == "neuro":
-            if not user_is_pro(user_id):
-                await query.edit_message_text("Нейроретушь доступна только для Pro-пользователей 💎")
-                return ConversationHandler.END
-            processed_bytes = neural_retouch_deepai(file_path)
-            result = cv2.imdecode(np.frombuffer(processed_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
-        else:
-            await query.edit_message_text("Неверный выбор.")
-            return ConversationHandler.END
-
-        increment_user_count(user_id)
-        merged = merge_images(original, result)
-        await query.message.reply_photo(merged, caption=f"Режим: {mode.title()} ✅")
-        await query.edit_message_text("Обработка завершена.")
-        context.user_data.clear()
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        return ConversationHandler.END
+        target_id = int(context.args[0])
+        set_user_pro(target_id, False)
+        await update.message.reply_text(f"Pro-доступ пользователя {target_id} удалён ❌")
     except Exception as e:
-        logger.error(f"Ошибка обработки: {e}")
-        await query.edit_message_text("Произошла ошибка при обработке изображения.")
-        return ConversationHandler.END
+        await update.message.reply_text(f"Ошибка: {e}")
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Операция отменена ❌")
-    return ConversationHandler.END
-
-WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = f"{os.getenv('WEBHOOK_BASE')}{WEBHOOK_PATH}"
-
-def main():
-    app = Application.builder().token(os.getenv("BOT_TOKEN")).build()
-
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("retouch", retouch_start)],
-        states={
-            RETOUCH_WAITING_FOR_IMAGE: [MessageHandler(filters.Document.IMAGE | filters.PHOTO, retouch_photo_handler)],
-            RETOUCH_WAITING_FOR_OPTION: [CallbackQueryHandler(retouch_option_handler, pattern="^preset:")],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("admin", admin))
-    app.add_handler(CommandHandler("setpro", setpro))
-    app.add_handler(conv_handler)
-
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.getenv("PORT", 8000)),
-        webhook_path=WEBHOOK_PATH,
-        webhook_url=WEBHOOK_URL,
-    )
-
-if __name__ == '__main__':
-    main()
+async def resetcount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("Нет доступа ❌")
+        return
+    if not context.args:
+        await update.message.reply_text("Использование: /resetcount user_id")
+        return
+    try:
+        target_id = int(context.args[0])
+        reset_user_count(target_id)
+        await update.message.reply_text(f"Счётчик пользователя {target_id} сброшен 🔄")
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка: {e}")
