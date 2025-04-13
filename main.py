@@ -27,6 +27,7 @@ RETOUCH_WAITING_FOR_IMAGE = 1
 RETOUCH_WAITING_FOR_OPTION = 2
 ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.heic']
 MAX_FREE_RETOUCHES = 5
+ADMIN_IDS = [123456789]  # Заменить на Telegram user_id администратора
 
 INSTRUCTIONS_TEXT = (
     "📎 Отправьте фото *файлом*, не сжимая изображение.\n\n"
@@ -66,6 +67,11 @@ def user_has_access(user_id):
 
 def user_is_pro(user_id):
     return get_user_data(user_id).get("is_pro", False)
+
+def set_user_pro(user_id, value: bool):
+    user = get_user_data(user_id)
+    user["is_pro"] = value
+    save_users(users_data)
 
 # === Image processing ===
 def adjust_brightness_contrast(image, brightness=30, contrast=0):
@@ -125,6 +131,32 @@ def neural_retouch_deepai(image_path: str) -> bytes:
 # === Telegram Handlers ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Привет! Я бот EasyRetouch ✨\nИспользуй /retouch, чтобы начать обработку фото.")
+
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("Нет доступа ❌")
+        return
+
+    report = [f"Всего пользователей: {len(users_data)}"]
+    for uid, data in users_data.items():
+        report.append(f"{uid}: Pro={data['is_pro']}, Обработки={data['count']}")
+    await update.message.reply_text("\n".join(report))
+
+async def setpro(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("Нет доступа ❌")
+        return
+    if not context.args:
+        await update.message.reply_text("Использование: /setpro user_id")
+        return
+    try:
+        target_id = int(context.args[0])
+        set_user_pro(target_id, True)
+        await update.message.reply_text(f"Пользователю {target_id} выдан Pro ✅")
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка: {e}")
 
 async def retouch_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(INSTRUCTIONS_TEXT, parse_mode="Markdown")
@@ -229,6 +261,8 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("admin", admin))
+    app.add_handler(CommandHandler("setpro", setpro))
     app.add_handler(conv_handler)
 
     app.run_webhook(
