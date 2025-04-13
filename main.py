@@ -7,6 +7,7 @@ import os
 import json
 import requests
 import csv
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -243,7 +244,7 @@ async def export_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = os.getenv("WEBHOOK_BASE") + WEBHOOK_PATH
 
-def main():
+async def main():
     app = Application.builder().token(os.getenv("BOT_TOKEN")).build()
 
     conv = ConversationHandler(
@@ -253,6 +254,7 @@ def main():
             RETOUCH_WAITING_FOR_OPTION: [CallbackQueryHandler(retouch_option_handler, pattern="^preset:")],
         },
         fallbacks=[],
+        per_message=True
     )
 
     app.add_handler(CommandHandler("start", start))
@@ -263,11 +265,17 @@ def main():
     app.add_handler(CommandHandler("exportusers", export_users))
     app.add_handler(conv)
 
-   app.run_webhook(
-    listen="0.0.0.0",
-    port=int(os.getenv("PORT", 8000)),
-    webhook_url=WEBHOOK_URL
-)
+    # Устанавливаем Webhook
+    await app.bot.set_webhook(url=WEBHOOK_URL)
+
+    # Запускаем приложение
+    await app.start()
+    await app.updater.start_webhook(
+        listen="0.0.0.0",
+        port=int(os.getenv("PORT", 8000)),
+        webhook_path=WEBHOOK_PATH,
+    )
+    await app.updater.wait()
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
