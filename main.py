@@ -5,6 +5,7 @@ from io import BytesIO
 from PIL import Image
 import os
 import json
+import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -34,7 +35,6 @@ INSTRUCTIONS_TEXT = (
     "Поддерживаются форматы JPG/JPEG/HEIC."
 )
 
-# === Пользователи ===
 USERS_FILE = "users.json"
 def load_users():
     if os.path.exists(USERS_FILE):
@@ -64,7 +64,10 @@ def user_has_access(user_id):
     user = get_user_data(user_id)
     return user["is_pro"] or user["count"] < MAX_FREE_RETOUCHES
 
-# === Обработка изображений ===
+def user_is_pro(user_id):
+    return get_user_data(user_id).get("is_pro", False)
+
+# === Image processing ===
 def adjust_brightness_contrast(image, brightness=30, contrast=0):
     return cv2.convertScaleAbs(image, alpha=(contrast + 127) / 127, beta=brightness)
 
@@ -103,6 +106,22 @@ def merge_images(img1, img2):
     output.seek(0)
     return output
 
+def neural_retouch_deepai(image_path: str) -> bytes:
+    api_key = os.getenv("DEEPAI_API_KEY", "dd660eb7-a85c-490c-962b-eae835ff8c7c")
+    try:
+        response = requests.post(
+            "https://api.deepai.org/api/torch-srgan",
+            files={"image": open(image_path, "rb")},
+            headers={"api-key": api_key}
+        )
+        result_url = response.json().get("output_url")
+        if result_url:
+            return requests.get(result_url).content
+        else:
+            raise ValueError("DeepAI API did not return output_url.")
+    except Exception as e:
+        raise RuntimeError(f"DeepAI API error: {e}")
+
 # === Telegram Handlers ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Привет! Я бот EasyRetouch ✨\nИспользуй /retouch, чтобы начать обработку фото.")
@@ -130,11 +149,16 @@ async def retouch_photo_handler(update: Update, context: ContextTypes.DEFAULT_TY
             await update.message.reply_text("Ошибка при декодировании изображения.")
             return ConversationHandler.END
 
+        file_path = f"temp_{update.message.message_id}.jpg"
+        cv2.imwrite(file_path, img)
         context.user_data["original_image"] = img
+        context.user_data["file_path"] = file_path
+
         keyboard = [
             [InlineKeyboardButton("Лайт ✨", callback_data="preset:light")],
             [InlineKeyboardButton("Бьюти 💄", callback_data="preset:beauty")],
             [InlineKeyboardButton("Про 🎯", callback_data="preset:pro")],
+            [InlineKeyboardButton("Нейроретушь 🧠", callback_data="preset:neuro")],
         ]
         await update.message.reply_text("Выбери режим ретуши:", reply_markup=InlineKeyboardMarkup(keyboard))
         return RETOUCH_WAITING_FOR_OPTION
@@ -147,33 +171,48 @@ async def retouch_option_handler(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     user_id = query.from_user.id
     original = context.user_data.get("original_image")
+    file_path = context.user_data.get("file_path")
+
     if original is None:
         await query.edit_message_text("Файл не найден. Попробуйте снова.")
         return ConversationHandler.END
 
     mode = query.data.split(":")[1]
-    if mode == "light":
-        result = correct_color_exposure(adjust_brightness_contrast(original))
-    elif mode == "beauty":
-        result = enhance_sharpness(remove_noise(skin_retouch(original)))
-    elif mode == "pro":
-        result = full_process(original)
-    else:
-        await query.edit_message_text("Неверный выбор.")
-        return ConversationHandler.END
 
-    increment_user_count(user_id)
-    merged = merge_images(original, result)
-    await query.message.reply_photo(merged, caption=f"Режим: {mode.title()} ✅")
-    await query.edit_message_text("Обработка завершена.")
-    context.user_data.clear()
-    return ConversationHandler.END
+    try:
+        if mode == "light":
+            result = correct_color_exposure(adjust_brightness_contrast(original))
+        elif mode == "beauty":
+            result = enhance_sharpness(remove_noise(skin_retouch(original)))
+        elif mode == "pro":
+            result = full_process(original)
+        elif mode == "neuro":
+            if not user_is_pro(user_id):
+                await query.edit_message_text("Нейроретушь доступна только для Pro-пользователей 💎")
+                return ConversationHandler.END
+            processed_bytes = neural_retouch_deepai(file_path)
+            result = cv2.imdecode(np.frombuffer(processed_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+        else:
+            await query.edit_message_text("Неверный выбор.")
+            return ConversationHandler.END
+
+        increment_user_count(user_id)
+        merged = merge_images(original, result)
+        await query.message.reply_photo(merged, caption=f"Режим: {mode.title()} ✅")
+        await query.edit_message_text("Обработка завершена.")
+        context.user_data.clear()
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        return ConversationHandler.END
+    except Exception as e:
+        logger.error(f"Ошибка обработки: {e}")
+        await query.edit_message_text("Произошла ошибка при обработке изображения.")
+        return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Операция отменена ❌")
     return ConversationHandler.END
 
-# === Webhook запуск ===
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{os.getenv('WEBHOOK_BASE')}{WEBHOOK_PATH}"
 
