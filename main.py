@@ -264,11 +264,10 @@ def main():
     app.add_handler(conv)
 
     app.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.getenv("PORT", 8000)),
-        webhook_path=WEBHOOK_PATH,
-        webhook_url=WEBHOOK_URL,
-    )
+    listen="0.0.0.0",
+    port=int(os.getenv("PORT", 8000)),
+    url=WEBHOOK_URL,
+)
 
 if __name__ == '__main__':
     main()
