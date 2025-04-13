@@ -221,9 +221,8 @@ async def main():
 
     await app.bot.set_webhook(url=WEBHOOK_URL)
     await app.updater.start_webhook(
-        listen="0.0.0.0",
-        port=int(os.getenv("PORT", 8000)),
-        webhook_path=WEBHOOK_PATH,
+    listen="0.0.0.0",
+    port=int(os.getenv("PORT", 8000)),
     )
     await app.updater.wait()
 
