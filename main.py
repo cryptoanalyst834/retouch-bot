@@ -4,6 +4,7 @@ import numpy as np
 from io import BytesIO
 from PIL import Image
 import os
+import json
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -24,7 +25,6 @@ logger = logging.getLogger(__name__)
 RETOUCH_WAITING_FOR_IMAGE = 1
 RETOUCH_WAITING_FOR_OPTION = 2
 ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.heic']
-user_processing_counts = {}
 MAX_FREE_RETOUCHES = 5
 
 INSTRUCTIONS_TEXT = (
@@ -34,7 +34,37 @@ INSTRUCTIONS_TEXT = (
     "Поддерживаются форматы JPG/JPEG/HEIC."
 )
 
-# === Image processing ===
+# === Пользователи ===
+USERS_FILE = "users.json"
+def load_users():
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE, 'r') as f:
+            return json.load(f)
+    return {}
+
+def save_users(data):
+    with open(USERS_FILE, 'w') as f:
+        json.dump(data, f)
+
+users_data = load_users()
+
+def get_user_data(user_id):
+    user_id = str(user_id)
+    if user_id not in users_data:
+        users_data[user_id] = {"count": 0, "is_pro": False}
+        save_users(users_data)
+    return users_data[user_id]
+
+def increment_user_count(user_id):
+    user = get_user_data(user_id)
+    user["count"] += 1
+    save_users(users_data)
+
+def user_has_access(user_id):
+    user = get_user_data(user_id)
+    return user["is_pro"] or user["count"] < MAX_FREE_RETOUCHES
+
+# === Обработка изображений ===
 def adjust_brightness_contrast(image, brightness=30, contrast=0):
     return cv2.convertScaleAbs(image, alpha=(contrast + 127) / 127, beta=brightness)
 
@@ -83,8 +113,12 @@ async def retouch_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def retouch_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_processing_counts.get(user_id, 0) >= MAX_FREE_RETOUCHES:
-        await update.message.reply_text("Вы использовали 5 бесплатных улучшений. Подпишитесь на Pro-доступ, чтобы продолжить ✨")
+    if not user_has_access(user_id):
+        keyboard = [[InlineKeyboardButton("Получить Pro-доступ 💎", url="https://t.me/your_payment_link")]]
+        await update.message.reply_text(
+            "Вы использовали 5 бесплатных улучшений. Хотите продолжить?", 
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return ConversationHandler.END
 
     if update.message.document:
@@ -128,7 +162,7 @@ async def retouch_option_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text("Неверный выбор.")
         return ConversationHandler.END
 
-    user_processing_counts[user_id] = user_processing_counts.get(user_id, 0) + 1
+    increment_user_count(user_id)
     merged = merge_images(original, result)
     await query.message.reply_photo(merged, caption=f"Режим: {mode.title()} ✅")
     await query.edit_message_text("Обработка завершена.")
