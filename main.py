@@ -27,7 +27,7 @@ RETOUCH_WAITING_FOR_IMAGE = 1
 RETOUCH_WAITING_FOR_OPTION = 2
 ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.heic']
 MAX_FREE_RETOUCHES = 5
-ADMIN_IDS = [123456789]  # Заменить на Telegram user_id администратора
+ADMIN_IDS = [743050845]  # Заменить на Telegram user_id администратора
 
 INSTRUCTIONS_TEXT = (
     "📎 Отправьте фото *файлом*, не сжимая изображение.\n\n"
