@@ -1,4 +1,4 @@
-import logging
+main_code = '''import logging
 import cv2
 import numpy as np
 from io import BytesIO
@@ -32,9 +32,9 @@ MAX_FREE_RETOUCHES = 5
 ADMIN_IDS = [743050845]
 
 INSTRUCTIONS_TEXT = (
-    "📎 Отправьте фото *файлом*, не сжимая изображение.\n\n"
-    "📱 Телефон: Скрепка → Файл → Галерея → Отправить.\n"
-    "🖥 ПК: Скрепка → Выбрать файл → Убрать галочку 'Сжать изображение' → Отправить.\n\n"
+    "📎 Отправьте фото *файлом*, не сжимая изображение.\\n\\n"
+    "📱 Телефон: Скрепка → Файл → Галерея → Отправить.\\n"
+    "🖥 ПК: Скрепка → Выбрать файл → Убрать галочку 'Сжать изображение' → Отправить.\\n\\n"
     "Поддерживаются форматы JPG/JPEG/HEIC."
 )
 
@@ -132,7 +132,7 @@ def neural_retouch_deepai(image_path: str) -> bytes:
         raise RuntimeError("Ошибка нейросети")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Я бот EasyRetouch ✨\nИспользуй /retouch, чтобы начать обработку фото.")
+    await update.message.reply_text("Привет! Я бот EasyRetouch ✨\\nИспользуй /retouch, чтобы начать обработку фото.")
 
 async def retouch_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(INSTRUCTIONS_TEXT, parse_mode="Markdown")
@@ -203,13 +203,12 @@ async def retouch_option_handler(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data.clear()
     return ConversationHandler.END
 
-# --- Админ-панель ---
-
+# Админ-команды
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return await update.message.reply_text("Нет доступа ❌")
     report = [f"{uid}: Pro={d['is_pro']} Обработки={d['count']}" for uid, d in users_data.items()]
-    await update.message.reply_text("\n".join(report))
+    await update.message.reply_text("\\n".join(report))
 
 async def setpro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS: return
@@ -240,7 +239,7 @@ async def export_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_document(f)
     os.remove("users_export.csv")
 
-# --- Main ---
+# Запуск через Webhook
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = os.getenv("WEBHOOK_BASE") + WEBHOOK_PATH
 
@@ -253,8 +252,7 @@ async def main():
             RETOUCH_WAITING_FOR_IMAGE: [MessageHandler(filters.Document.IMAGE | filters.PHOTO, retouch_photo_handler)],
             RETOUCH_WAITING_FOR_OPTION: [CallbackQueryHandler(retouch_option_handler, pattern="^preset:")],
         },
-        fallbacks=[],
-        per_message=True
+        fallbacks=[]
     )
 
     app.add_handler(CommandHandler("start", start))
@@ -265,11 +263,7 @@ async def main():
     app.add_handler(CommandHandler("exportusers", export_users))
     app.add_handler(conv)
 
-    # Устанавливаем Webhook
     await app.bot.set_webhook(url=WEBHOOK_URL)
-
-    # Запускаем приложение
-    await app.start()
     await app.updater.start_webhook(
         listen="0.0.0.0",
         port=int(os.getenv("PORT", 8000)),
@@ -279,3 +273,9 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
+'''
+
+with open("/mnt/data/main.py", "w") as f:
+    f.write(main_code)
+
+"/mnt/data/main.py"
