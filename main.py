@@ -27,10 +27,9 @@ logger = logging.getLogger(__name__)
 RETOUCH_WAITING_FOR_IMAGE = 1
 RETOUCH_WAITING_FOR_OPTION = 2
 MAX_FREE_RETOUCHES = 5
-ADMIN_IDS = [743050845]  # твой user_id
-
-# === БАЗА ПОЛЬЗОВАТЕЛЕЙ ===
+ADMIN_IDS = [743050845]  # твой Telegram user_id
 USERS_FILE = "users.json"
+
 if not os.path.exists(USERS_FILE):
     with open(USERS_FILE, "w") as f: f.write("{}")
 
@@ -47,17 +46,9 @@ def get_user(user_id):
         save_users()
     return users_data[uid]
 
-def increment_count(user_id): 
-    get_user(user_id)["count"] += 1
-    save_users()
-
-def set_pro(user_id, value=True): 
-    get_user(user_id)["is_pro"] = value
-    save_users()
-
-def reset_count(user_id): 
-    get_user(user_id)["count"] = 0
-    save_users()
+def increment_count(user_id): get_user(user_id)["count"] += 1; save_users()
+def set_pro(user_id, value=True): get_user(user_id)["is_pro"] = value; save_users()
+def reset_count(user_id): get_user(user_id)["count"] = 0; save_users()
 
 # === ОБРАБОТКА ===
 def adjust_brightness_contrast(image, brightness=30, contrast=0):
@@ -146,8 +137,8 @@ async def apply_option(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "pro":
             result = full_process(img)
         elif data == "neuro":
-            if not user_is_pro(uid):
-                await query.edit_message_text("Нейросеть только для Pro 💎")
+            if not get_user(uid)["is_pro"]:
+                await query.edit_message_text("Нейросеть доступна только для Pro 💎")
                 return ConversationHandler.END
             content = neural_retouch(path)
             result = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_COLOR)
@@ -160,7 +151,7 @@ async def apply_option(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Обработка завершена.")
     except Exception as e:
         logger.error(e)
-        await query.edit_message_text("Произошла ошибка.")
+        await query.edit_message_text("Ошибка.")
     finally:
         if os.path.exists(path): os.remove(path)
         context.user_data.clear()
@@ -221,8 +212,8 @@ async def main():
 
     await app.bot.set_webhook(url=WEBHOOK_URL)
     await app.updater.start_webhook(
-    listen="0.0.0.0",
-    port=int(os.getenv("PORT", 8000)),
+        listen="0.0.0.0",
+        port=int(os.getenv("PORT", 8000))
     )
     await app.updater.wait()
 
