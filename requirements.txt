@@ -1,6 +1,6 @@
-python-telegram-bot[webhooks]
+python-telegram-bot==20.7
 opencv-python
 numpy
 Pillow
-python-dotenv
 requests
+python-dotenv
