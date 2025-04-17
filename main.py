@@ -1,13 +1,13 @@
-import logging
 import os
 import json
 import csv
-import asyncio
-import requests
+import logging
 import cv2
+import requests
 import numpy as np
 from io import BytesIO
 from PIL import Image
+from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -18,7 +18,6 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from dotenv import load_dotenv
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -168,7 +167,7 @@ async def export_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_document(f)
     os.remove("users.csv")
 
-async def main():
+def main():
     app = Application.builder().token(os.getenv("BOT_TOKEN")).build()
 
     conv = ConversationHandler(
@@ -188,7 +187,7 @@ async def main():
     app.add_handler(CommandHandler("exportusers", export_users))
     app.add_handler(conv)
 
-    await app.run_polling()
+    app.run_polling()
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
