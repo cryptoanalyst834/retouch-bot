@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY . .
 
-# Установка зависимостей для OpenCV
+# Зависимости для OpenCV
 RUN apt-get update && apt-get install -y \
     libgl1 \
     libglib2.0-0 \
@@ -12,7 +12,6 @@ RUN apt-get update && apt-get install -y \
     libxext6 \
     libxrender-dev
 
-# Установка Python-зависимостей
 RUN pip install --no-cache-dir -r requirements.txt
 
 CMD ["python", "main.py"]
