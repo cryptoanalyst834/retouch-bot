@@ -82,8 +82,7 @@ def log_neuro(user_id, username, filename):
     log_file = "logs/neuro_log.csv"
     with open(log_file, "a", encoding="utf-8") as f:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        f.write(f"{now},{user_id},{username},{filename}
-")
+        f.write(f"{now},{user_id},{username},{filename}\n")
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton("📸 Что ты умеешь?", callback_data="explain")]]
