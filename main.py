@@ -89,7 +89,6 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton("📸 Что ты умеешь?", callback_data="explain")]]
     await update.message.reply_text(
         "👋 Привет! Я бот-ретушер.\n\n"
-
 "
         "Я могу улучшить фото:
 "
