@@ -2,12 +2,14 @@ import os
 import json
 import csv
 import logging
-import cv2
 import requests
+import cv2
 import numpy as np
 from io import BytesIO
 from PIL import Image
+from datetime import datetime
 from dotenv import load_dotenv
+import replicate
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -60,16 +62,74 @@ def merge(img1, img2):
     new_im.paste(i1, (0, 0)); new_im.paste(i2, (i1.width, 0))
     out = BytesIO(); new_im.save(out, format="JPEG"); out.seek(0); return out
 
-def neural(path):
-    api = os.getenv("DEEPAI_API_KEY")
-    res = requests.post("https://api.deepai.org/api/torch-srgan",
-                        files={"image": open(path, "rb")},
-                        headers={"api-key": api})
-    url = res.json().get("output_url")
-    return requests.get(url).content if url else None
+def run_replicate_face_restore(image_path):
+    os.environ["REPLICATE_API_TOKEN"] = os.getenv("REPLICATE_API_TOKEN")
+    output = replicate.run(
+        "sczhou/codeformer:1b9c09c7f60c8d266a0ec1adf84e63b6b74ccbd8e8102b8c32eb1b7e6f54a154",
+        input={
+            "image": open(image_path, "rb"),
+            "background_enhance": True,
+            "face_upsample": True,
+            "codeformer_fidelity": 0.5
+        }
+    )
+    result_url = output["output"]
+    response = requests.get(result_url)
+    return response.content if response.status_code == 200 else None
+
+def log_neuro(user_id, username, filename):
+    os.makedirs("logs", exist_ok=True)
+    log_file = "logs/neuro_log.csv"
+    with open(log_file, "a", encoding="utf-8") as f:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        f.write(f"{now},{user_id},{username},{filename}
+")
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Отправь /retouch, чтобы начать.")
+    kb = [[InlineKeyboardButton("📸 Что ты умеешь?", callback_data="explain")]]
+    await update.message.reply_text(
+        "👋 Привет! Я бот-ретушер.
+
+"
+        "Я могу улучшить фото:
+"
+        "— Лёгкая коррекция ✨
+"
+        "— Бьюти 💄
+"
+        "— Про 🎯
+"
+        "— Нейросеть 🧠 (AI)
+
+"
+        "Хочешь подробнее?",
+        reply_markup=InlineKeyboardMarkup(kb)
+    )
+
+async def extra_callbacks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if q.data == "explain":
+        await q.edit_message_text(
+            "🎯 Возможности:
+
+"
+            "✨ *Лайт* — цвет и яркость
+"
+            "💄 *Бьюти* — кожа, мягкость
+"
+            "🎯 *Про* — усиление всех деталей
+"
+            "🧠 *Нейро* — AI-ретушь лица (временно доступна всем)
+
+"
+            "Используй /retouch чтобы начать ➕"
+        )
+    elif q.data == "download_full":
+        path = ctx.user_data.get("path")
+        if path and os.path.exists(path):
+            with open(path, "rb") as f:
+                await q.message.reply_document(f, filename="retouch.jpg")
 
 async def retouch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📎 Отправь фото *файлом* без сжатия.")
@@ -79,7 +139,7 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     user = get_user(uid)
     if not user["is_pro"] and user["count"] >= MAX_FREE_RETOUCHES:
-        await update.message.reply_text("Вы использовали лимит. Получите Pro-доступ 💎")
+        await update.message.reply_text("Лимит. Получи Pro-доступ 💎")
         return ConversationHandler.END
 
     if update.message.document:
@@ -98,7 +158,7 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         kb = [[InlineKeyboardButton("Лайт ✨", callback_data="light")],
               [InlineKeyboardButton("Бьюти 💄", callback_data="beauty")],
               [InlineKeyboardButton("Про 🎯", callback_data="pro")],
-              [InlineKeyboardButton("Нейроретушь 🧠", callback_data="neuro")]]
+              [InlineKeyboardButton("Нейро 🧠", callback_data="neuro")]]
         await update.message.reply_text("Выбери режим:", reply_markup=InlineKeyboardMarkup(kb))
         return RETOUCH_WAITING_FOR_OPTION
 
@@ -118,54 +178,27 @@ async def apply_option(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         elif mode == "pro":
             result = full_process(img)
         elif mode == "neuro":
-            if not get_user(uid)["is_pro"]:
-                await q.edit_message_text("Нейросеть доступна только для Pro 💎")
-                return ConversationHandler.END
-            content = neural(path)
+            await q.edit_message_text("🧠 AI-обработка... Подождите 10 сек.")
+            content = run_replicate_face_restore(path)
             result = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_COLOR)
+            log_neuro(uid, q.from_user.username, os.path.basename(path))
         else:
             return ConversationHandler.END
 
         increment(uid)
         m = merge(img, result)
         await q.message.reply_photo(m, caption="Готово ✅")
-        await q.edit_message_text("Обработка завершена.")
+
+        kb = [[InlineKeyboardButton("📥 Скачать в качестве", callback_data="download_full")]]
+        await q.message.reply_text("Хочешь сохранить оригинал?", reply_markup=InlineKeyboardMarkup(kb))
+
     except Exception as e:
         logger.error(e)
-        await q.edit_message_text("Произошла ошибка.")
+        await q.message.reply_text("Ошибка обработки.")
     finally:
-        if os.path.exists(path): os.remove(path)
         ctx.user_data.clear()
+        if os.path.exists(path): os.remove(path)
     return ConversationHandler.END
-
-# === АДМИН ===
-async def admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
-        return await update.message.reply_text("Нет доступа ❌")
-    text = [f"{uid}: Pro={d['is_pro']} Обработки={d['count']}" for uid,d in users_data.items()]
-    await update.message.reply_text("\n".join(text))
-
-async def setpro(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    set_pro(ctx.args[0], True)
-    await update.message.reply_text("✅ Pro выдан")
-
-async def revokepro(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    set_pro(ctx.args[0], False)
-    await update.message.reply_text("❌ Pro убран")
-
-async def resetcount(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    reset_count(ctx.args[0])
-    await update.message.reply_text("🔄 Сброс")
-
-async def export_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    with open("users.csv", "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["user_id", "is_pro", "count"])
-        for uid, d in users_data.items():
-            writer.writerow([uid, d["is_pro"], d["count"]])
-    with open("users.csv", "rb") as f:
-        await update.message.reply_document(f)
-    os.remove("users.csv")
 
 def main():
     app = Application.builder().token(os.getenv("BOT_TOKEN")).build()
@@ -180,11 +213,7 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("admin", admin))
-    app.add_handler(CommandHandler("setpro", setpro))
-    app.add_handler(CommandHandler("revokepro", revokepro))
-    app.add_handler(CommandHandler("resetcount", resetcount))
-    app.add_handler(CommandHandler("exportusers", export_users))
+    app.add_handler(CallbackQueryHandler(extra_callbacks, pattern="^(explain|download_full)$"))
     app.add_handler(conv)
 
     app.run_polling()
