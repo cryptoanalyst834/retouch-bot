@@ -11,6 +11,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 import replicate
 import asyncio
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -33,27 +34,22 @@ MAX_FREE_RETOUCHES = 5
 USERS_FILE = "users.json"
 
 if not os.path.exists(USERS_FILE):
-    with open(USERS_FILE, "w") as f:
-        f.write("{}")
-with open(USERS_FILE, "r") as f:
-    users_data = json.load(f)
+    with open(USERS_FILE, "w") as f: f.write("{}")
+with open(USERS_FILE, "r") as f: users_data = json.load(f)
 
-def save_users():
-    with open(USERS_FILE, "w") as f:
-        json.dump(users_data, f)
-
+def save_users(): 
+    with open(USERS_FILE, "w") as f: json.dump(users_data, f)
 def get_user(uid):
     uid = str(uid)
     if uid not in users_data:
         users_data[uid] = {"count": 0, "is_pro": False}
         save_users()
     return users_data[uid]
-
 def increment(uid): get_user(uid)["count"] += 1; save_users()
 def set_pro(uid, val=True): get_user(uid)["is_pro"] = val; save_users()
 def reset_count(uid): get_user(uid)["count"] = 0; save_users()
 
-def correct_color(image): hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV); h,s,v=cv2.split(hsv); v=cv2.equalizeHist(v); return cv2.cvtColor(cv2.merge((h,s,v)), cv2.COLOR_HSV2BGR)
+def correct_color(image): hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV); h,s,v=cv2.split(hsv);v=cv2.equalizeHist(v); return cv2.cvtColor(cv2.merge((h,s,v)), cv2.COLOR_HSV2BGR)
 def brightness(image): return cv2.convertScaleAbs(image, alpha=1.3, beta=20)
 def skin(image): return cv2.bilateralFilter(image, 9, 75, 75)
 def noise(image): return cv2.fastNlMeansDenoisingColored(image, None, 10, 10, 7, 21)
@@ -69,6 +65,7 @@ def merge(img1, img2):
     out = BytesIO(); new_im.save(out, format="JPEG"); out.seek(0)
     return out
 
+# 🔐 Безопасный вызов Replicate
 def run_replicate_face_restore(image_path):
     os.environ["REPLICATE_API_TOKEN"] = os.getenv("REPLICATE_API_TOKEN")
     output = replicate.run(
@@ -198,8 +195,6 @@ async def apply_option(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             os.remove(path)
     return ConversationHandler.END
 
-import asyncio
-
 async def main():
     app = Application.builder().token(os.getenv("BOT_TOKEN")).build()
 
@@ -216,14 +211,8 @@ async def main():
     app.add_handler(CallbackQueryHandler(extra_callbacks, pattern="^(explain|download_full)$"))
     app.add_handler(conv)
 
-    # ❗ Удаляем webhook перед polling (важно для Railway)
     await app.bot.delete_webhook(drop_pending_updates=True)
-
-    # 🟢 Инициализация и запуск polling
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    await app.updater.wait()
+    await app.run_polling()
 
 if __name__ == '__main__':
     asyncio.run(main())
