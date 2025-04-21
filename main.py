@@ -10,6 +10,7 @@ from PIL import Image
 from datetime import datetime
 from dotenv import load_dotenv
 import replicate
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -48,25 +49,11 @@ def get_user(uid):
         save_users()
     return users_data[uid]
 
-def increment(uid):
-    get_user(uid)["count"] += 1
-    save_users()
+def increment(uid): get_user(uid)["count"] += 1; save_users()
+def set_pro(uid, val=True): get_user(uid)["is_pro"] = val; save_users()
+def reset_count(uid): get_user(uid)["count"] = 0; save_users()
 
-def set_pro(uid, val=True):
-    get_user(uid)["is_pro"] = val
-    save_users()
-
-def reset_count(uid):
-    get_user(uid)["count"] = 0
-    save_users()
-
-# === Обработка изображений ===
-def correct_color(image):
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-    h, s, v = cv2.split(hsv)
-    v = cv2.equalizeHist(v)
-    return cv2.cvtColor(cv2.merge((h, s, v)), cv2.COLOR_HSV2BGR)
-
+def correct_color(image): hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV); h,s,v=cv2.split(hsv); v=cv2.equalizeHist(v); return cv2.cvtColor(cv2.merge((h,s,v)), cv2.COLOR_HSV2BGR)
 def brightness(image): return cv2.convertScaleAbs(image, alpha=1.3, beta=20)
 def skin(image): return cv2.bilateralFilter(image, 9, 75, 75)
 def noise(image): return cv2.fastNlMeansDenoisingColored(image, None, 10, 10, 7, 21)
@@ -82,7 +69,6 @@ def merge(img1, img2):
     out = BytesIO(); new_im.save(out, format="JPEG"); out.seek(0)
     return out
 
-# === Replicate нейросеть ===
 def run_replicate_face_restore(image_path):
     os.environ["REPLICATE_API_TOKEN"] = os.getenv("REPLICATE_API_TOKEN")
     output = replicate.run(
@@ -100,12 +86,9 @@ def run_replicate_face_restore(image_path):
 
 def log_neuro(user_id, username, filename):
     os.makedirs("logs", exist_ok=True)
-    log_file = "logs/neuro_log.csv"
-    with open(log_file, "a", encoding="utf-8") as f:
+    with open("logs/neuro_log.csv", "a", encoding="utf-8") as f:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         f.write(f"{now},{user_id},{username},{filename}\n")
-
-# === Старт и объяснение ===
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton("📸 Что ты умеешь?", callback_data="explain")]]
     await update.message.reply_text(
@@ -136,7 +119,7 @@ async def extra_callbacks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if path and os.path.exists(path):
             with open(path, "rb") as f:
                 await q.message.reply_document(f, filename="retouch.jpg")
-# === Загрузка фото и выбор режима ===
+
 async def retouch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📎 Отправь фото *файлом* без сжатия.")
     return RETOUCH_WAITING_FOR_IMAGE
@@ -158,14 +141,12 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Ошибка при загрузке.")
             return ConversationHandler.END
 
-        # 🔥 Уменьшаем изображение до 1024px по ширине
         if img.shape[1] > 1024:
             scale = 1024 / img.shape[1]
             img = cv2.resize(img, (0, 0), fx=scale, fy=scale)
 
         path = f"temp_{update.message.message_id}.jpg"
         cv2.imwrite(path, img)
-
         ctx.user_data["img"] = img
         ctx.user_data["path"] = path
 
@@ -178,7 +159,6 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Выбери режим:", reply_markup=InlineKeyboardMarkup(kb))
         return RETOUCH_WAITING_FOR_OPTION
 
-# === Применение выбранного режима ===
 async def apply_option(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -218,8 +198,7 @@ async def apply_option(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             os.remove(path)
     return ConversationHandler.END
 
-# === Запуск приложения ===
-def main():
+async def main():
     app = Application.builder().token(os.getenv("BOT_TOKEN")).build()
 
     conv = ConversationHandler(
@@ -235,7 +214,8 @@ def main():
     app.add_handler(CallbackQueryHandler(extra_callbacks, pattern="^(explain|download_full)$"))
     app.add_handler(conv)
 
-    app.run_polling()
+    await app.bot.delete_webhook(drop_pending_updates=True)
+    await app.run_polling()
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
