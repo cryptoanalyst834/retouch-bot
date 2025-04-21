@@ -198,6 +198,8 @@ async def apply_option(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             os.remove(path)
     return ConversationHandler.END
 
+import asyncio
+
 async def main():
     app = Application.builder().token(os.getenv("BOT_TOKEN")).build()
 
@@ -214,8 +216,14 @@ async def main():
     app.add_handler(CallbackQueryHandler(extra_callbacks, pattern="^(explain|download_full)$"))
     app.add_handler(conv)
 
+    # ❗ Удаляем webhook перед polling (важно для Railway)
     await app.bot.delete_webhook(drop_pending_updates=True)
-    await app.run_polling()
+
+    # 🟢 Инициализация и запуск polling
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    await app.updater.wait()
 
 if __name__ == '__main__':
     asyncio.run(main())
